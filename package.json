@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "seed": "node src/seeders/productSeeder.js",
+    "seed:admin": "node src/seeders/adminSeeder.js",
     "dev": "nodemon server.js"
   },
   "author": "",

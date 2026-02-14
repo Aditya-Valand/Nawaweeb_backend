@@ -17,7 +17,7 @@ const getAllProducts = async (req, res) => {
           id,
           size,
           stock_quantity,
-          price_override
+          price
         )
       `)
       .order('created_at', { ascending: false });
@@ -82,7 +82,7 @@ const getProductById = async (req, res) => {
           id,
           size,
           stock_quantity,
-          price_override
+          price
         )
       `);
 
@@ -135,7 +135,11 @@ const createProduct = async (req, res) => {
       });
     }
 
-    const { title, slug, price, images, description, is_active, variants } = req.body;
+    const { title, slug, price, images, description, is_active, collection, 
+      tags, 
+      full_description, 
+      is_limited_edition, 
+      variants } = req.body;
 
     // Validate required fields
     if (!title || !slug || price === undefined) {
@@ -154,7 +158,11 @@ const createProduct = async (req, res) => {
         price: Math.round(price), // Ensure integer (cents)
         images: images || [],
         description: description || '',
-        is_active: is_active !== undefined ? is_active : true
+        is_active: is_active !== undefined ? is_active : true,
+        collection: collection || null,
+        tags: tags || [],
+        full_description: full_description || '',
+        is_limited_edition: is_limited_edition || false
       })
       .select()
       .single();
@@ -178,8 +186,9 @@ const createProduct = async (req, res) => {
       const variantsToInsert = variants.map(v => ({
         product_id: product.id,
         size: v.size,
+        type: v.type,
         stock_quantity: v.stock_quantity || 0,
-        price_override: v.price_override ? Math.round(v.price_override) : null
+        price: v.price ? Math.round(v.price) : Math.round(price)
       }));
 
       const { data: variantData, error: variantError } = await supabase
@@ -219,19 +228,28 @@ const createProduct = async (req, res) => {
  * Update product
  * Admin only
  */
+/**
+ * Update product and its variants
+ * Admin only
+ */
+/**
+ * Update product and SYNC variants (Add/Update/Delete)
+ * Admin only
+ */
 const updateProduct = async (req, res) => {
   try {
-    // Verify admin
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. Admin only.'
-      });
+    if (!req.user || req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Access denied.' });
     }
 
     const { id } = req.params;
-    const { title, slug, price, images, description, is_active } = req.body;
+    const { 
+      title, slug, price, images, description, is_active,
+      collection, tags, full_description, is_limited_edition,
+      variants 
+    } = req.body;
 
+    // 1. Update Parent Product
     const updates = {};
     if (title) updates.title = title;
     if (slug) updates.slug = slug;
@@ -239,57 +257,82 @@ const updateProduct = async (req, res) => {
     if (images) updates.images = images;
     if (description !== undefined) updates.description = description;
     if (is_active !== undefined) updates.is_active = is_active;
+    if (collection !== undefined) updates.collection = collection;
+    if (tags !== undefined) updates.tags = tags;
+    if (full_description !== undefined) updates.full_description = full_description;
+    if (is_limited_edition !== undefined) updates.is_limited_edition = is_limited_edition;
 
-    if (Object.keys(updates).length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'No valid fields to update'
-      });
-    }
-
-    const { data: product, error } = await supabase
+    const { error: productError } = await supabase
       .from('products')
       .update(updates)
-      .eq('id', id)
-      .select(`
-        *,
-        product_variants (
-          id,
-          size,
-          stock_quantity,
-          price_override
-        )
-      `)
-      .single();
+      .eq('id', id);
 
-    if (error) {
-      if (error.code === 'PGRST116') {
-        return res.status(404).json({
-          success: false,
-          message: 'Product not found'
-        });
+    if (productError) throw productError;
+
+    // 2. SYNC VARIANTS (The Magic Step 🪄)
+    if (variants && Array.isArray(variants)) {
+      
+      // A. Identify IDs to Keep
+      // Get all variant IDs currently in the frontend list
+      const variantIdsToKeep = variants
+        .filter(v => v.id) // Only ones that already have an ID
+        .map(v => v.id);
+
+      // B. Delete Missing IDs (The Fix)
+      // "Delete from DB where product_id is THIS product AND id is NOT in the keep list"
+      const { error: deleteError } = await supabase
+        .from('product_variants')
+        .delete()
+        .eq('product_id', id)
+        .not('id', 'in', `(${variantIdsToKeep.join(',')})`); // ⚠️ If list is empty, this handles it safely? See check below.
+
+      // Safety check: If variantIdsToKeep is empty, delete ALL variants for this product
+      if (variantIdsToKeep.length === 0) {
+         await supabase.from('product_variants').delete().eq('product_id', id);
+      } else {
+         await supabase.from('product_variants').delete().eq('product_id', id).not('id', 'in', `(${variantIdsToKeep.join(',')})`);
       }
-      return res.status(400).json({
-        success: false,
-        message: error.message
+
+      // C. Upsert (Update Existing + Insert New)
+      const variantsToUpsert = variants.map(v => {
+        const payload = {
+          product_id: id,
+          size: v.size,
+          type: v.type || 'Ready-made',
+          stock_quantity: Number(v.stock || v.stock_quantity || 0),
+          price: v.price ? Math.round(v.price) : Math.round(price)
+        };
+        if (v.id) payload.id = v.id; // Attach ID if it exists
+        return payload;
       });
+
+      if (variantsToUpsert.length > 0) {
+        const { error: upsertError } = await supabase
+          .from('product_variants')
+          .upsert(variantsToUpsert);
+        
+        if (upsertError) console.error('Upsert Error:', upsertError);
+      }
     }
+
+    // 3. Return Updated Data
+    const { data: updatedProduct } = await supabase
+      .from('products')
+      .select(`*, product_variants(*)`)
+      .eq('id', id)
+      .single();
 
     return res.status(200).json({
       success: true,
       message: 'Product updated successfully',
-      data: { product }
+      data: { product: updatedProduct }
     });
 
   } catch (error) {
     console.error('Update product error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
-
 /**
  * Delete product
  * Admin only - cascades to variants via DB constraint

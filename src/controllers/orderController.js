@@ -295,66 +295,117 @@ const getOrderById = async (req, res) => {
 /**
  * Get all orders (Admin only)
  */
+// src/controllers/orderController.js
+
+// const getAllOrders = async (req, res) => {
+//   try {
+//     if (!req.user || req.user.role !== 'admin') {
+//       return res.status(403).json({ success: false, message: 'Access denied.' });
+//     }
+
+//     const { status, payment_status, limit = 50, offset = 0 } = req.query;
+
+//     // 👇 SIMPLIFIED QUERY
+//     let query = supabase
+//       .from('orders')
+//       .select(`
+//         *,
+//         profiles:orders_user_id_fkey ( 
+//           full_name,
+//           email
+//         ),
+//         order_items (
+//           product_id,
+//           quantity,
+//           price_at_purchase,
+//           products ( title, images )
+//         )
+//       `, { count: 'exact' })
+//       .order('created_at', { ascending: false })
+//       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+
+//     if (status) query = query.eq('status', status);
+//     if (payment_status) query = query.eq('payment_status', payment_status);
+
+//     const { data: orders, error, count } = await query;
+
+//     if (error) {
+//       console.error('Supabase Query Error:', error);
+//       // If simplified query fails, return empty list instead of crashing
+//       // This allows the Dashboard to load other data
+//       return res.status(200).json({ success: true, count: 0, orders: [] });
+//     }
+
+//     return res.status(200).json({
+//       success: true,
+//       count,
+//       orders: orders || [] 
+//     });
+
+//   } catch (error) {
+//     console.error('Get all orders FATAL error:', error);
+//     return res.status(500).json({ success: false, message: 'Internal server error' });
+//   }
+// };
 const getAllOrders = async (req, res) => {
   try {
-    // Verify admin
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. Admin only.'
-      });
+    if (!req.user || req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Access denied.' });
     }
 
-    const { status, payment_status, limit = 50, offset = 0 } = req.query;
+    const { limit = 50, offset = 0 } = req.query;
 
-    let query = supabase
+    // 1. Fetch Orders with nested items, variants, and products
+    // Note: No comments allowed inside the backticks here!
+    const { data: orders, error, count } = await supabase
       .from('orders')
       .select(`
         *,
-        profiles!orders_user_id_fkey (
-          full_name,
-          email
-        ),
         order_items (
           quantity,
-          price_at_purchase
+          price_at_purchase,
+          variant_id,
+          product_variants:variant_id (
+            size,
+            products:product_id (
+              title,
+              images
+            )
+          )
         )
       `, { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
-    if (status) {
-      query = query.eq('status', status);
-    }
-
-    if (payment_status) {
-      query = query.eq('payment_status', payment_status);
-    }
-
-    const { data: orders, error, count } = await query;
-
     if (error) {
-      return res.status(400).json({
-        success: false,
-        message: error.message
-      });
+      console.error('Supabase Query Error:', error.message);
+      return res.status(400).json({ success: false, message: error.message });
     }
+
+    // 2. Fetch Profiles separately to bypass the relationship cache bug
+    const userIds = [...new Set(orders.map(o => o.user_id))].filter(Boolean);
+    const { data: profiles } = await supabase
+      .from('profiles')
+      .select('id, full_name, email')
+      .in('id', userIds);
+
+    // 3. Merge locally
+    const enrichedOrders = orders.map(order => ({
+      ...order,
+      profiles: profiles?.find(p => p.id === order.user_id) || { full_name: 'Guest Ronin', email: 'N/A' }
+    }));
 
     return res.status(200).json({
       success: true,
       count,
-      data: { orders }
+      orders: enrichedOrders
     });
 
   } catch (error) {
-    console.error('Get all orders error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    console.error('Final Order Error:', error.message);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
-
 /**
  * Update order status (Admin only)
  */

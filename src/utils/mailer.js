@@ -8,6 +8,28 @@ const transporter = nodemailer.createTransport({
   }
 });
 
+/**
+ * Send a general email (used for welcome, password reset, etc.)
+ */
+const sendEmail = async (options) => {
+  try {
+    const mailOptions = {
+      from: `"Nawaweeb" <${process.env.EMAIL_USER}>`,
+      to: options.to,
+      subject: options.subject,
+      text: options.text || '',
+      html: options.html || ''
+    };
+
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error('Email send error:', error);
+    throw error;
+  }
+};
+
+exports.sendEmail = sendEmail;
 exports.sendOrderEmails = async (order) => {
   // 1. Email to YOU (Admin)
   await transporter.sendMail({

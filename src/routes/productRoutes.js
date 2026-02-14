@@ -10,7 +10,7 @@ router.get('/:id', productController.getProductById);
 
 // Admin routes - product management
 router.post('/', authenticate, requireAdmin, productController.createProduct);
-router.patch('/:id', authenticate, requireAdmin, productController.updateProduct);
+router.put('/:id', authenticate, requireAdmin, productController.updateProduct);
 router.delete('/:id', authenticate, requireAdmin, productController.deleteProduct);
 
 // Admin routes - variant management
