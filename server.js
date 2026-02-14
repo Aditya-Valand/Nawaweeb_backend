@@ -1,60 +1,125 @@
+// server.js
+require('dotenv').config();
 const express = require('express');
-const dotenv = require('dotenv');
 const cors = require('cors');
-const helmet = require('helmet'); // 🛡️ Security Headers
-const mongoSanitize = require('express-mongo-sanitize'); // 🛡️ Anti-NoSQL Injection
-// const xss = require('xss-clean'); //
-// const { xss } = require('express-xss-sanitizer');
-const connectDB = require('./src/config/db');
+const helmet = require('helmet');
+const morgan = require('morgan');
+const { testConnection } = require('./src/config/db');
 
-// Import Routes
+// Import routes
+const authRoutes = require('./src/routes/authRoutes');
 const productRoutes = require('./src/routes/productRoutes');
 const orderRoutes = require('./src/routes/orderRoutes');
-const authRoutes = require('./src/routes/authRoutes');
 
-// Load environment variables
-dotenv.config();
-
-// Initialize App & Connect DB
 const app = express();
-connectDB();
 
-// Middleware
-app.use(helmet()); // Protects against well-known web vulnerabilities
-app.use(cors()); // Enable CORS for your React frontend
-app.use(express.json({ limit: '10kb' })); // Limit body size to prevent DoS
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
-app.use(mongoSanitize()); // Prevent NoSQL injection attacks
+// Security middleware
+app.use(helmet());
 
-// Route Mounts
-app.use((req, res, next) => {
-  console.log(`➡️ ${req.method} ${req.url}`);
-  next();
-});
-app.use('/api/products', productRoutes); // For Drop management
-app.use('/api/orders', orderRoutes);     // For Request Order flow
-app.use('/api/auth', authRoutes);       // For Admin/User Login
+// CORS configuration
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || '*',
+  credentials: true
+}));
 
-// Basic Health Check
-app.get('/', (req, res) => {
-  res.send('Nawaweeb API is running... ⚔️');
-});
+// Body parsing middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Error Handling Middleware
-app.use((err, req, res, next) => {
-  const statusCode = res.statusCode === 200 ? 500 : res.statusCode;
-  res.status(statusCode).json({
-    message: err.message,
-    stack: process.env.NODE_ENV === 'production' ? null : err.stack,
+// Logging middleware (only in development)
+if (process.env.NODE_ENV !== 'production') {
+  app.use(morgan('dev'));
+}
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Server is running',
+    timestamp: new Date().toISOString()
   });
 });
-app.use((req, res, next) => {
-  console.log(`➡️ ${req.method} ${req.url}`);
-  next();
+
+// API Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/products', productRoutes);
+app.use('/api/orders', orderRoutes);
+
+// Root endpoint
+app.get('/', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Nawaweeb Backend API',
+    version: '2.0.0',
+    database: 'Supabase PostgreSQL'
+  });
 });
 
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: 'Route not found'
+  });
+});
+
+// Global error handler
+app.use((error, req, res, next) => {
+  console.error('Global error handler:', error);
+
+  // Don't expose internal errors in production
+  const message = process.env.NODE_ENV === 'production'
+    ? 'An unexpected error occurred'
+    : error.message;
+
+  res.status(error.status || 500).json({
+    success: false,
+    message,
+    ...(process.env.NODE_ENV !== 'production' && { stack: error.stack })
+  });
+});
+
+// Start server
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-  console.log(`🚀 Clan Server running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
+const startServer = async () => {
+  try {
+    // Test Supabase connection
+    console.log('🔄 Testing Supabase connection...');
+    const connected = await testConnection();
+
+    if (!connected) {
+      console.error('❌ Failed to connect to Supabase. Check your environment variables.');
+      process.exit(1);
+    }
+
+    // Start listening
+    app.listen(PORT, () => {
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🗄️  Database: Supabase PostgreSQL`);
+      console.log(`🌐 API Base: http://localhost:${PORT}/api`);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    });
+
+  } catch (error) {
+    console.error('❌ Server startup failed:', error);
+    process.exit(1);
+  }
+};
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('⚠️  SIGTERM signal received: closing HTTP server');
+  process.exit(0);
 });
+
+process.on('SIGINT', () => {
+  console.log('⚠️  SIGINT signal received: closing HTTP server');
+  process.exit(0);
+});
+
+startServer();
+
+module.exports = app;
