@@ -1,35 +1,20 @@
+// src/routes/productRoutes.js
 const express = require('express');
 const router = express.Router();
 const productController = require('../controllers/productController');
-const { protect, restrictTo } = require('../middleware/auth');
-const upload = require("../middleware/upload");
+const { authenticate, requireAdmin } = require('../middleware/auth');
 
-// PUBLIC: Everyone can see products (only active ones)
+// Public routes - anyone can view products
 router.get('/', productController.getAllProducts);
 router.get('/:id', productController.getProductById);
 
-// PRIVATE: Only Admin can add new "Anime Artifacts"
-router.post(
-  "/add",
-  protect,
-  restrictTo("admin"),
-  upload.array("images", 6),
-  productController.createProduct
-);
+// Admin routes - product management
+router.post('/', authenticate, requireAdmin, productController.createProduct);
+router.patch('/:id', authenticate, requireAdmin, productController.updateProduct);
+router.delete('/:id', authenticate, requireAdmin, productController.deleteProduct);
 
-// router.post('/add', protect, restrictTo('admin'), productController.createProduct);
-// router.patch('/:id', protect, restrictTo('admin'), productController.updateProduct);
-router.patch(
-  "/:id",
-  protect,
-  restrictTo("admin"),
-  upload.array("images", 6),
-  productController.updateProduct
-);
-router.delete('/:id', protect, restrictTo('admin'), productController.deleteProduct);
+// Admin routes - variant management
+router.post('/:productId/variants', authenticate, requireAdmin, productController.addVariant);
+router.patch('/variants/:variantId/stock', authenticate, requireAdmin, productController.updateVariantStock);
 
 module.exports = router;
-
-// router.post('/add', protect, restrictTo('admin'), productController.createProduct);
-// router.patch('/:id', protect, restrictTo('admin'), productController.updateProduct);
-// router.delete('/:id', protect, restrictTo('admin'), productController.deleteProduct);

@@ -1,15 +1,17 @@
+// src/routes/orderRoutes.js
 const express = require('express');
 const router = express.Router();
-const { protect, restrictTo } = require('../middleware/auth');
+const { authenticate, requireAdmin } = require('../middleware/auth');
 const orderController = require('../controllers/orderController');
 
-// PUBLIC: Users can request orders
-router.post('/request', orderController.requestOrder);
+// User routes - authenticated users
+router.post('/', authenticate, orderController.createOrder);
+router.get('/', authenticate, orderController.getUserOrders);
+router.get('/:id', authenticate, orderController.getOrderById);
+router.post('/:id/cancel', authenticate, orderController.cancelOrder);
 
-// PRIVATE: Only Admin can see the list of all order requests
-router.get('/all', protect, restrictTo('admin'), orderController.getAllOrders);
-
-// ADMIN: Update order status
-router.patch('/:id/status', protect, restrictTo('admin'), orderController.updateOrderStatus);
+// Admin routes - order management
+router.get('/admin/all', authenticate, requireAdmin, orderController.getAllOrders);
+router.patch('/:id/status', authenticate, requireAdmin, orderController.updateOrderStatus);
 
 module.exports = router;
