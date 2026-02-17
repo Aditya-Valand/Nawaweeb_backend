@@ -1,6 +1,6 @@
-// src/controllers/authController.js
 const { supabase } = require('../config/db');
-const { sendEmail } = require('../utils/mailer');
+const { sendEmail, getResetPasswordTemplate } = require('../utils/mailer');
+const crypto = require('crypto');
 
 /**
  * Register a new user
@@ -65,12 +65,10 @@ const register = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: 'User registered successfully',
-      data: {
-        user: {
-          id: authData.user.id,
-          email: authData.user.email,
-          full_name
-        }
+      user: {
+        id: authData.user.id,
+        email: authData.user.email,
+        full_name
       }
     });
 
@@ -89,7 +87,11 @@ const register = async (req, res) => {
  */
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    let { email, password } = req.body;
+
+    // Ensure email and password are strings
+    email = String(email).trim();
+    password = String(password).trim();
 
     if (!email || !password) {
       return res.status(400).json({
@@ -98,6 +100,16 @@ const login = async (req, res) => {
       });
     }
 
+    // Validate email format
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid email format'
+      });
+    }
+
+    console.log('Login attempt for:', email);
+
     // Authenticate with Supabase
     const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
       email,
@@ -105,9 +117,11 @@ const login = async (req, res) => {
     });
 
     if (authError) {
+      console.error('Login auth error:', authError.message);
       return res.status(401).json({
         success: false,
-        message: 'Invalid credentials'
+        message: 'Invalid credentials',
+        error: authError.message
       });
     }
 
@@ -129,16 +143,14 @@ const login = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Login successful',
-      data: {
-        token: authData.session.access_token,
-        refresh_token: authData.session.refresh_token,
-        user: {
-          id: profile.id,
-          email: profile.email,
-          full_name: profile.full_name,
-          role: profile.role,
-          is_clan_member: profile.is_clan_member
-        }
+      token: authData.session.access_token,
+      refresh_token: authData.session.refresh_token,
+      user: {
+        id: profile.id,
+        email: profile.email,
+        full_name: profile.full_name,
+        role: profile.role,
+        is_clan_member: profile.is_clan_member
       }
     });
 
@@ -282,11 +294,166 @@ const updateUserRole = async (req, res) => {
     });
   }
 };
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
 
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    // 1. Check if user exists (Using Admin to bypass "View own profile" RLS)
+    const { data: profile, error: findError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('email', email)
+      .single();
+
+    // If user not found or error, return generic message for security
+    if (findError || !profile) {
+      return res.status(200).json({
+        success: true,
+        message: 'If this email exists, reset link has been sent.'
+      });
+    }
+
+    // 2. Generate secure token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+
+    // Expiry = 10 minutes (Ensure it is converted to ISO string for DB)
+    const expiry = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+    // 3. Save in DB (Using Admin to bypass "Update own profile" RLS)
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({
+        reset_token: resetToken,
+        reset_token_expiry: expiry
+      })
+      .eq('id', profile.id);
+
+    // If the DB update failed, stop here! Do not send the email.
+    if (updateError) {
+      console.error('Failed to save reset token:', updateError);
+      return res.status(500).json({
+        success: false,
+        message: 'Could not process request'
+      });
+    }
+
+    // 4. Create reset link
+    // Make sure this matches your Frontend Route exactly (including the /:token part)
+    const resetLink = `http://localhost:5173/reset-password/${resetToken}`;
+
+    // 5. Send enhanced email
+    await sendEmail({
+      to: email,
+      subject: 'Password Reset Request - Nawaweeb',
+      html: getResetPasswordTemplate(resetLink)
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Reset link sent to email.'
+    });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+const resetPassword = async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { password, confirmPassword } = req.body;
+
+    // 1. Validation
+    if (!password || !confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password and confirm password are required'
+      });
+    }
+
+    if (password !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Passwords do not match'
+      });
+    }
+
+    // 2. Find user with token (Using Admin to bypass RLS)
+    const { data: profile, error: findError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('reset_token', token)
+      .single();
+
+    // If no profile found with that token, the link is invalid
+    if (findError || !profile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or tampered link'
+      });
+    }
+
+    // 3. Check expiry
+    const isExpired = new Date(profile.reset_token_expiry) < new Date();
+    if (isExpired) {
+      return res.status(400).json({
+        success: false,
+        message: 'Link expired'
+      });
+    }
+
+    // 4. Update the actual Auth password
+    // Note: auth.admin.updateUserById is already an admin operation
+    const { error: authError } = await supabase.auth.admin.updateUserById(
+      profile.id,
+      { password: password }
+    );
+
+    if (authError) {
+      return res.status(400).json({
+        success: false,
+        message: authError.message
+      });
+    }
+
+    // 5. Clean up the token (Using Admin to ensure the update succeeds)
+    await supabase
+      .from('profiles')
+      .update({
+        reset_token: null,
+        reset_token_expiry: null
+      })
+      .eq('id', profile.id);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password updated successfully'
+    });
+
+  } catch (error) {
+    console.error('Reset Password Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
 module.exports = {
   register,
   login,
   getProfile,
   updateProfile,
-  updateUserRole
+  updateUserRole,
+  forgotPassword,
+  resetPassword
 };

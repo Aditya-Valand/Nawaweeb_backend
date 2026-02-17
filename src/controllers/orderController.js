@@ -179,52 +179,35 @@ const createOrder = async (req, res) => {
  */
 const getUserOrders = async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { status } = req.query;
+    const userId = req.user.id; // From authenticate middleware
 
-    let query = supabase
+    const { data: orders, error } = await supabase
       .from('orders')
       .select(`
         *,
         order_items (
-          *,
-          product_variants (
+          quantity,
+          price_at_purchase,
+          variant_id,
+          product_variants:variant_id (
             size,
-            products (
+            products:product_id (
               title,
               images
             )
           )
         )
       `)
-      .eq('user_id', userId)
+      .eq('user_id', userId) // <--- Only show THIS user's orders
       .order('created_at', { ascending: false });
 
-    if (status) {
-      query = query.eq('status', status);
-    }
+    if (error) throw error;
 
-    const { data: orders, error } = await query;
-
-    if (error) {
-      return res.status(400).json({
-        success: false,
-        message: error.message
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      count: orders.length,
-      data: { orders }
-    });
+    return res.status(200).json({ success: true, orders });
 
   } catch (error) {
-    console.error('Get user orders error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    console.error('My Orders Error:', error.message);
+    res.status(500).json({ success: false, message: 'Server Error' });
   }
 };
 

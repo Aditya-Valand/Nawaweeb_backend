@@ -491,7 +491,44 @@ const updateVariantStock = async (req, res) => {
   }
 };
 
+const getHeroProduct = async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .eq('is_active', true)
+      // Assuming you have this flag. If not, remove this .eq line
+      .eq('is_limited_edition', true) 
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error && error.code !== 'PGRST116') { // PGRST116 is "no rows found"
+      throw error;
+    }
+
+    // If no limited edition found, fallback to just the latest active product
+    if (!data) {
+      const { data: fallback } = await supabase
+        .from('products')
+        .select('*')
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+      
+      return res.status(200).json({ success: true, product: fallback });
+    }
+
+    return res.status(200).json({ success: true, product: data });
+
+  } catch (error) {
+    console.error('Hero Fetch Error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
 module.exports = {
+  getHeroProduct,
   getAllProducts,
   getProductById,
   createProduct,

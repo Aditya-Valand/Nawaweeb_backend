@@ -9,6 +9,8 @@ const { testConnection } = require('./src/config/db');
 const authRoutes = require('./src/routes/authRoutes');
 const productRoutes = require('./src/routes/productRoutes');
 const orderRoutes = require('./src/routes/orderRoutes');
+// const wishlistRoutes = require('./src/routes/wishlistRoutes');
+const userRotes = require('./src/routes/userRoutes');
 
 const app = express();
 
@@ -38,6 +40,8 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
+// app.use('/api/wishlist', wishlistRoutes);
+app.use('/api/user', userRotes);
 
 // Root endpoint
 app.get('/', (req, res) => {

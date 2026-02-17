@@ -55,3 +55,19 @@ exports.sendOrderEmails = async (order) => {
     });
   }
 };
+
+exports.getResetPasswordTemplate = (resetLink) => {
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+      <h2 style="color: #047857; text-align: center;">Reset Your Password</h2>
+      <p>You requested a password reset for your Nawaweeb account.</p>
+      <p style="text-align: center;">
+        <a href="${resetLink}" style="background-color: #047857; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">Reset Password</a>
+      </p>
+      <p>If you didn't request this, you can safely ignore this email.</p>
+      <p>This link will expire in 10 minutes.</p>
+      <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+      <p style="font-size: 12px; color: #888; text-align: center;">Nawaweeb Clan</p>
+    </div>
+  `;
+};

@@ -4,7 +4,8 @@ const router = express.Router();
 const productController = require('../controllers/productController');
 const { authenticate, requireAdmin } = require('../middleware/auth');
 
-// Public routes - anyone can view products
+
+router.get('/hero', productController.getHeroProduct);// Public routes - anyone can view products
 router.get('/', productController.getAllProducts);
 router.get('/:id', productController.getProductById);
 
