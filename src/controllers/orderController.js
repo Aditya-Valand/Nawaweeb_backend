@@ -338,54 +338,77 @@ const getAllOrders = async (req, res) => {
 
     const { limit = 50, offset = 0 } = req.query;
 
-    // 1. Fetch Orders with nested items, variants, and products
-    // Note: No comments allowed inside the backticks here!
-    const { data: orders, error, count } = await supabase
+    // Step 1: Fetch orders (flat - no nested joins to avoid FK ambiguity issues)
+    const { data: orders, error: ordersError } = await supabase
       .from('orders')
-      .select(`
-        *,
-        order_items (
-          quantity,
-          price_at_purchase,
-          variant_id,
-          product_variants:variant_id (
-            size,
-            products:product_id (
-              title,
-              images
-            )
-          )
-        )
-      `, { count: 'exact' })
+      .select('*')
       .order('created_at', { ascending: false })
-      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+      .range(parseInt(offset) || 0, (parseInt(offset) || 0) + (parseInt(limit) || 50) - 1);
 
-    if (error) {
-      console.error('Supabase Query Error:', error.message);
-      return res.status(400).json({ success: false, message: error.message });
+    if (ordersError) {
+      console.error('Orders fetch error:', ordersError);
+      return res.status(400).json({ success: false, message: ordersError.message });
     }
 
-    // 2. Fetch Profiles separately to bypass the relationship cache bug
-    const userIds = [...new Set(orders.map(o => o.user_id))].filter(Boolean);
-    const { data: profiles } = await supabase
-      .from('profiles')
-      .select('id, full_name, email')
-      .in('id', userIds);
+    if (!orders || orders.length === 0) {
+      return res.status(200).json({ success: true, count: 0, orders: [] });
+    }
 
-    // 3. Merge locally
+    // Step 2: Fetch order items for these orders
+    const orderIds = orders.map(o => o.id);
+    const { data: orderItems, error: itemsError } = await supabase
+      .from('order_items')
+      .select('id, order_id, quantity, price_at_purchase, variant_id')
+      .in('order_id', orderIds);
+
+    if (itemsError) {
+      console.error('Order items fetch error:', itemsError);
+    }
+
+    // Step 3: Fetch variant info (size) for the items
+    const variantIds = [...new Set((orderItems || []).map(i => i.variant_id).filter(Boolean))];
+    const { data: variants } = variantIds.length > 0
+      ? await supabase.from('product_variants').select('id, size, product_id').in('id', variantIds)
+      : { data: [] };
+
+    // Step 4: Fetch product info (title, images) for those variants
+    const productIds = [...new Set((variants || []).map(v => v.product_id).filter(Boolean))];
+    const { data: products } = productIds.length > 0
+      ? await supabase.from('products').select('id, title, images').in('id', productIds)
+      : { data: [] };
+
+    // Step 5: Fetch customer profiles
+    const userIds = [...new Set(orders.map(o => o.user_id).filter(Boolean))];
+    const { data: profiles } = userIds.length > 0
+      ? await supabase.from('profiles').select('id, full_name, email').in('id', userIds)
+      : { data: [] };
+
+    // Step 6: Merge everything in JS (no nested join ambiguity)
     const enrichedOrders = orders.map(order => ({
       ...order,
-      profiles: profiles?.find(p => p.id === order.user_id) || { full_name: 'Guest Ronin', email: 'N/A' }
+      profiles: (profiles || []).find(p => p.id === order.user_id) || { full_name: 'Guest Ronin', email: 'N/A' },
+      order_items: (orderItems || [])
+        .filter(item => item.order_id === order.id)
+        .map(item => {
+          const variant = (variants || []).find(v => v.id === item.variant_id);
+          const product = (products || []).find(p => p.id === variant?.product_id);
+          return {
+            ...item,
+            product_variants: variant
+              ? { size: variant.size, products: product || null }
+              : null
+          };
+        })
     }));
 
     return res.status(200).json({
       success: true,
-      count,
+      count: enrichedOrders.length,
       orders: enrichedOrders
     });
 
   } catch (error) {
-    console.error('Final Order Error:', error.message);
+    console.error('Get all orders error:', error);
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
@@ -405,8 +428,8 @@ const updateOrderStatus = async (req, res) => {
     const { id } = req.params;
     const { status, payment_status } = req.body;
 
-    const validStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
-    const validPaymentStatuses = ['pending', 'paid', 'failed', 'refunded'];
+    const validStatuses = ['pending', 'shipped', 'delivered', 'cancelled'];
+    const validPaymentStatuses = ['unpaid', 'paid', 'failed', 'refunded'];
 
     const updates = {};
 
