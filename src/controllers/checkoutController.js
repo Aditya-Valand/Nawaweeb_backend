@@ -442,19 +442,19 @@ const handleWebhookNotification = async (req, res) => {
 
     // Step 3: Check if order already exists (idempotency check)
     const { data: existingOrder, error: checkError } = await supabase
-      .from('orders')
-      .select('id')
-      .eq('razorpay_order_id', razorpayOrderId)
-      .single();
+  .from('orders')
+  .select('id')
+  .eq('razorpay_order_id', razorpay_order_id)
+  .single();
 
-    if (!checkError && existingOrder) {
-      // Order already created, acknowledge webhook
-      console.log(`Order already exists for Razorpay order ID: ${razorpayOrderId}`);
-      return res.status(200).json({
-        success: true,
-        message: 'Order already processed',
-      });
-    }
+if (existingOrder) {
+  // The webhook beat us to it! Just tell the frontend it was successful.
+  return res.status(200).json({ 
+    success: true, 
+    message: "Payment verified (processed via webhook)",
+    order_id: existingOrder.id 
+  });
+}
 
     // Step 4: Get user ID from pending orders store
     const pendingOrder = getPendingOrder(razorpayOrderId);
