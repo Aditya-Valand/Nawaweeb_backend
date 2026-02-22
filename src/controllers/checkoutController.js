@@ -423,6 +423,8 @@ const handleWebhookNotification = async (req, res) => {
       event !== 'payment.authorized' &&
       event !== 'payment.captured'
     ) {
+    //   const razorpay_order_id = payload.payment.entity.order_id;
+    // const razorpay_payment_id = payload.payment.entity.id;
       // Not a payment success event, acknowledge and return
       return res.status(200).json({
         success: true,
@@ -436,8 +438,8 @@ const handleWebhookNotification = async (req, res) => {
         message: 'Invalid webhook payload structure',
       });
     }
-
-    const razorpayOrderId = eventData.order_id;
+ const razorpayOrderId = eventData.order_id;
+    const razorpay_order_id = eventData.order_id;
     const razorpayPaymentId = eventData.id;
 
     // Step 3: Check if order already exists (idempotency check)
@@ -610,7 +612,165 @@ if (existingOrder) {
     });
   }
 };
+// const handleWebhookNotification = async (req, res) => {
+//   try {
+//     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
+//     if (!webhookSecret) {
+//       console.warn('RAZORPAY_WEBHOOK_SECRET not configured');
+//       return res.status(500).json({ success: false, message: 'Webhook secret not configured' });
+//     }
+
+//     // Step 1: Verify webhook signature
+//     const razorpaySignature = req.headers['x-razorpay-signature'];
+//     if (!razorpaySignature) {
+//       return res.status(400).json({ success: false, message: 'Webhook signature missing' });
+//     }
+
+//     const requestBody = JSON.stringify(req.body);
+//     const shasum = crypto.createHmac('sha256', webhookSecret);
+//     shasum.update(requestBody);
+//     const calculatedSignature = shasum.digest('hex');
+
+//     if (calculatedSignature !== razorpaySignature) {
+//       console.warn('Invalid webhook signature received');
+//       return res.status(400).json({ success: false, message: 'Invalid webhook signature' });
+//     }
+
+//     // Step 2: Extract webhook event data
+//     const event = req.body.event;
+//     const eventData = req.body.payload?.payment?.entity;
+
+//     if (event !== 'payment.authorized' && event !== 'payment.captured') {
+//       return res.status(200).json({ success: true, message: `Event ${event} acknowledged` });
+//     }
+
+//     if (!eventData) {
+//       return res.status(400).json({ success: false, message: 'Invalid webhook payload structure' });
+//     }
+
+//     // 👇 DEFINED CORRECTLY HERE 👇
+//     const razorpay_order_id = eventData.order_id;
+//     const razorpay_payment_id = eventData.id;
+
+//     // Step 3: Check if order already exists (idempotency check)
+//     const { data: existingOrder, error: checkError } = await supabase
+//       .from('orders')
+//       .select('id')
+//       .eq('razorpay_order_id', razorpay_order_id)
+//       .single();
+
+//     if (existingOrder) {
+//       console.log(`Webhook: Order already exists for Razorpay order ID: ${razorpay_order_id}`);
+//       return res.status(200).json({ 
+//         success: true, 
+//         message: "Payment verified (processed via webhook)",
+//         order_id: existingOrder.id 
+//       });
+//     }
+
+//     // Step 4: Get user ID from pending orders store
+//     const pendingOrder = getPendingOrder(razorpay_order_id);
+//     if (!pendingOrder) {
+//       console.error('Cannot find user for Razorpay order ID:', razorpay_order_id);
+//       return res.status(200).json({
+//         success: true,
+//         message: 'Webhook acknowledged, but order mapping not found',
+//       });
+//     }
+
+//     const userId = pendingOrder.userId;
+
+//     // Step 5: Fetch user's cart items
+//     const { data: cartItems, error: cartError } = await supabase
+//       .from('cart_items')
+//       .select(`
+//         id, quantity, variant_id, product_id,
+//         product_variants(id, price, stock_quantity),
+//         products(id, price)
+//       `)
+//       .eq('user_id', userId);
+
+//     if (cartError || !cartItems || cartItems.length === 0) {
+//       console.error('Cart error or empty cart in webhook:', userId);
+//       return res.status(200).json({ success: true, message: 'Webhook acknowledged, but cart is empty' });
+//     }
+
+//     // Step 6: Recalculate total amount and prepare order data
+//     let totalAmountInRupees = 0;
+//     const orderItemsData = [];
+
+//     for (const item of cartItems) {
+//       const variantPrice = item.product_variants?.price;
+//       const productPrice = item.products?.price;
+//       const priceAtPurchase = variantPrice !== null ? variantPrice : productPrice;
+
+//       if (!priceAtPurchase) {
+//         return res.status(500).json({ success: false, message: 'Product pricing error in webhook processing' });
+//       }
+
+//       totalAmountInRupees += priceAtPurchase * item.quantity;
+
+//       orderItemsData.push({
+//         variant_id: item.variant_id,
+//         quantity: item.quantity,
+//         price_at_purchase: priceAtPurchase,
+//       });
+//     }
+
+//     // Step 7: Create order
+//     const { data: newOrder, error: orderError } = await supabase
+//       .from('orders')
+//       .insert({
+//         user_id: userId,
+//         total_amount: totalAmountInRupees,
+//         status: 'pending',
+//         shipping_address: { note: 'Address to be updated by user or from webhook notes' },
+//         payment_method: 'razorpay',
+//         payment_status: 'paid',
+//         razorpay_order_id: razorpay_order_id,
+//         razorpay_payment_id: razorpay_payment_id,
+//       })
+//       .select();
+
+//     if (orderError) {
+//       console.error('Error creating order in webhook:', orderError);
+//       return res.status(200).json({ success: true, message: 'Webhook acknowledged, database error logged' });
+//     }
+
+//     const orderId = newOrder[0].id;
+
+//     // Step 8: Insert order items
+//     const orderItemsWithOrderId = orderItemsData.map((item) => ({ ...item, order_id: orderId }));
+//     const { error: orderItemsError } = await supabase.from('order_items').insert(orderItemsWithOrderId);
+
+//     if (orderItemsError) {
+//       console.error('Error inserting order items in webhook:', orderItemsError);
+//       await supabase.from('orders').delete().eq('id', orderId);
+//       return res.status(200).json({ success: true, message: 'Webhook acknowledged, order items error logged' });
+//     }
+
+//     // Step 9: Decrement stock
+//     for (const item of cartItems) {
+//       await supabase
+//         .from('product_variants')
+//         .update({ stock_quantity: item.product_variants.stock_quantity - item.quantity })
+//         .eq('id', item.variant_id);
+//     }
+
+//     // Step 10: Clear cart
+//     await supabase.from('cart_items').delete().eq('user_id', userId);
+
+//     console.log(`Webhook: Order ${orderId} created for payment ${razorpay_payment_id}`);
+//     clearPendingOrder(razorpay_order_id);
+
+//     return res.status(200).json({ success: true, message: 'Webhook processed successfully', order_id: orderId });
+
+//   } catch (error) {
+//     console.error('Error handling webhook:', error);
+//     return res.status(200).json({ success: true, message: 'Webhook received and logged' });
+//   }
+// };
 module.exports = {
   createRazorpayOrder,
   verifyRazorpaySignature,
